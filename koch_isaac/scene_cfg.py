@@ -2,7 +2,7 @@
 import isaaclab.sim as sim_utils
 from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sensors import CameraCfg
+from isaaclab.sensors import CameraCfg, ContactSensorCfg
 from isaaclab.utils.configclass import configclass
 from .robot_cfg import KOCH_CFG
 from . import settings as s
@@ -54,6 +54,8 @@ class KochSceneCfg(InteractiveSceneCfg):
     bin_y2 = static_box("BinY2", (s.BIN_INNER[0], s.BIN_WALL, s.BIN_INNER[2]),
                         (s.BIN_POS[0], s.BIN_POS[1]-(s.BIN_INNER[1]+s.BIN_WALL)/2, s.BIN_FLOOR+s.BIN_INNER[2]/2), (0.95, 0.75, 0.04))
     front_camera: CameraCfg | None = None
+    static_finger_contact: ContactSensorCfg | None = None
+    moving_finger_contact: ContactSensorCfg | None = None
 
 
 def front_camera_cfg():
@@ -70,5 +72,5 @@ def front_camera_cfg():
         prim_path="{ENV_REGEX_NS}/FrontCamera", update_period=1/30,
         height=480, width=640, data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(focal_length=24.0, horizontal_aperture=24.0,
-                                        clipping_range=(0.01, 5.0)),
+                                        clipping_range=(0.01, 1.2)),
     )

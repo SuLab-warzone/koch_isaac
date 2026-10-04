@@ -4,3 +4,4 @@ __pycache__/
 assets/koch/usd/
 outputs/*
 !outputs/.gitkeep
+checkpoints/

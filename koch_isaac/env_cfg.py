@@ -90,3 +90,21 @@ class KochPickPlaceEnvCfg(ManagerBasedRLEnvCfg):
     def enable_front_camera(self):
         self.scene.front_camera = front_camera_cfg()
         self.observations = CameraObservationsCfg()
+
+    def enable_grasp_evaluation(self):
+        from isaaclab.sensors import ContactSensorCfg
+        from .contact_spawn import spawn_contact_koch
+        self.scene.robot.spawn.func = spawn_contact_koch
+        self.scene.robot.spawn.activate_contact_sensors = True
+        prefix = ("{ENV_REGEX_NS}/Robot/Geometry/follower_base_link/follower_link1_1/"
+                  "follower_link2_1/follower_link3_1/follower_link4_1/follower_gripper_static_1")
+        self.scene.static_finger_contact = ContactSensorCfg(
+            prim_path=prefix, filter_prim_paths_expr=["{ENV_REGEX_NS}/PinkBox"],
+            update_period=0.0, history_length=0,
+        )
+        self.scene.moving_finger_contact = ContactSensorCfg(
+            prim_path=prefix+"/follower_gripper_moving_1",
+            filter_prim_paths_expr=["{ENV_REGEX_NS}/PinkBox"], update_period=0.0, history_length=0,
+        )
+        if self.scene.num_envs > 1:
+            self.scene.env_spacing = 3.0

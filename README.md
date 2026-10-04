@@ -120,7 +120,7 @@ revision is recorded in `config/baseline.json`; weights were not copied.
 Frozen evaluation is now available with `--mode act`; see the commands below.
 The runner converts measured joints using your calibration and uses saved policy
 pre/postprocessing. The 31-value privileged RL observation is not passed to ACT.
-Training/PPO is not implemented by this rollout feature.
+Residual PPO is available on the residual-ppo branch; see the commands below.
 
 ## Suggested progression
 
@@ -201,72 +201,151 @@ apply. Normal preview and joint exercise remain in radians. Final output include
 counts, LeRobot state and flags for readings outside the calibration ranges.
 The normal RL observation vector is unchanged; do not feed its 31 values to ACT.
 
-## Run your ACT baseline
+## Evaluate a frozen policy
+
+Run commands from /home/niel/Documents/1stProject/koch_isaac. run.sh uses the
+Isaac Python interpreter and starts a separate LeRobot inference worker. No
+physical robot connection is made. No checkpoint is downloaded or changed.
 
 ```bash
-cd /home/niel/Documents/1stProject/koch_isaac
+# Watch five episodes and save logs, camera images and video.
+./run.sh --mode policy --episodes 5 --video
 
-# Watch five full episodes and save the front-camera video.
-./run.sh --mode act --episodes 5 --video
+# Evaluate without writing rollout files.
+./run.sh --mode policy --headless --episodes 20 --no-save-output
 
-# Evaluate without a GUI. Each episode uses the current 20-second task limit.
-./run.sh --mode act --headless --episodes 20 --video
+# Two environments, five completed episodes EACH. Files are automatically disabled.
+./run.sh --mode policy --headless --num_envs 2 --episodes 5
 
-# Short plumbing check. --steps stops early; partial episodes are not successes.
-./run.sh --mode act --headless --steps 120
+# Select another local checkpoint explicitly.
+./run.sh --mode policy --policy-path /absolute/path/to/pretrained_model --no-save-output
 ```
 
-The default policy is the cached home_v2 revision in `config/baseline.json`.
-No download, training, checkpoint modification or physical robot connection is
-performed. Supply `--policy-path /absolute/path/to/pretrained_model` for another
-compatible local ACT checkpoint. Its saved preprocessor and postprocessor must
-be present alongside the weights. The loader checks six state/action values and
-a single RGB front image [3,480,640], and strictly loads checkpoint weights.
+--mode act remains an alias for frozen-policy evaluation. --policy-path is the
+only base-checkpoint selector; its config determines ACT or diffusion architecture.
+There is no automatic checkpoint switching. The default remains the cached
+home_v2 revision in config/baseline.json. Both architectures must provide six
+state/action features, one front RGB image [3,480,640], and saved pre/postprocessors.
+Temporal-ensemble ACT and stateful/custom processors are currently rejected.
+Actual checkpoint validation has been performed with ACT; a diffusion checkpoint
+has not yet been supplied for end-to-end verification.
 
-Isaac stays in its existing environment. The launcher automatically starts a
-private local worker using
-`/home/niel/miniforge3/envs/lerobot061/bin/python`. Override with
-`--policy-python PATH`. Use `--policy-device cpu` if desired; it affects
-only inference, while `--device` controls the simulator. Only one simulated
-environment is supported by this first rollout implementation.
+--policy-python defaults to /home/niel/miniforge3/envs/lerobot061/bin/python;
+--policy-device controls frozen inference, --device controls Isaac, and
+--policy-batch-size (default 4, maximum 8) bounds inference microbatches.
 
-The closed loop is:
+Measured joints are converted with the follower calibration. RGB is converted
+to CHW [0,1], then the checkpoint preprocessor is applied once. Chunk prediction
+runs only when an environment needs new actions. Each environment owns its own
+chunk cursor and observation history, cleared on its own reset. The saved action
+postprocessor is applied once before conversion back to absolute URDF radians.
+Diffusion history advances every control step, including steps using cached actions.
+Control advances at 30 simulated Hz; wall-clock evaluation can be slower.
 
-1. Read actual joint positions in the named six-joint order and convert them with
-   `sim_to_lerobot`. Range units are the default; use
-   `--lerobot-use-degrees` only if the training robot used that convention.
-2. Send the measured state and current uint8 RGB frame to the worker. Convert RGB
-   to CHW floats in [0,1], then apply the saved preprocessor exactly once.
-3. Call `ACTPolicy.select_action` with frozen weights. Preserve the checkpoint's
-   100-action chunk queue, then apply the saved action postprocessor exactly once.
-4. Convert those six motor values through `lerobot_to_sim` and the configured
-   simulation joint limits. Advance 1/30 simulated second. Wall-clock speed may
-   be slower; this synchronous evaluation does not drop policy actions.
-5. At every automatic episode reset, clear the ACT queue and reset both processors
-   before the next observation is used.
+For one environment, --save-output (default) writes summary.json, rollout.jsonl,
+first_frame.png, last_frame.png, and optional front.mp4 beneath outputs/, or
+--output-dir PATH. --no-save-output creates none of those files and disables
+--snapshot. With --num_envs greater than one these files, videos and snapshots
+are always disabled, even if explicitly requested. Console summaries remain.
+Isaac/Kit may still write its own runtime diagnostic logs outside the project.
+Training checkpoints are controlled separately and remain enabled.
 
-Results go to `outputs/act_TIMESTAMP/`, or `--output-dir PATH`:
+--episodes is a per-environment quota; faster environments do not bias evaluation
+by contributing extra completed episodes. --steps caps vector steps, and partial
+episodes do not enter success rates. --seed defaults to 42. --episode-seconds
+changes the task horizon for diagnostics; leave the default 20 seconds when
+comparing policy performance.
 
-- `summary.json`: completed episodes, success rate, timeout/lost-box outcomes,
-  clipped-action counts, state-range violations and any unfinished episode.
-- `rollout.jsonl`: checkpoint/calibration metadata, periodic states/actions,
-  inference latency and per-episode results. `--log-every N` changes the interval.
-- `first_frame.png` / `last_frame.png`: the policy camera view.
-- `front.mp4`: optional video at 30 simulated fps, enabled with `--video`.
+## Grasp and placement metrics
 
-`--seed` defaults to 42. `--episode-seconds` can override the task horizon
-for diagnostics; keep the default horizon for comparable baseline evaluations.
-The reported success uses the existing stable-placement termination, not reward
-alone. An interrupted or step-limited partial episode is excluded from the success
-rate. Zero completed episodes reports a null success rate.
+- grab_success: both fingers contact the box above --grasp-force (default 0.01 N
+  per finger), its lowest point is at least --grasp-height (0.025 m) above the
+  table, and the box remains near the TCP, continuously for --grasp-hold (0.2 s).
+  This is remembered for the remainder of the episode.
+- placement_success: at episode end the whole box is inside the container,
+  resting near its floor, below the rim, moving slowly, and the TCP is clear.
+  This must hold continuously for 0.5 s; earlier placement that is subsequently
+  disturbed is not counted. Stable placement ends the episode early.
+- pick_place_success: both conditions occurred in the same episode.
 
-Camera viewpoint/intrinsics, appearance, dimensions, actuator tracking and joint
-references are still provisional. Check the first-frame image against the real
-training camera and inspect actions before interpreting simulation success as
-policy quality. The previous pose test showed roughly 6.5 degrees of shoulder-lift
-tracking error under load. A low simulation score does not establish low real-world
-performance, and this ACT checkpoint is not directly a PPO actor checkpoint.
+The console/summary report separate grasp and placement rates, timeouts, lost
+boxes and clipping counts. They capture terminal state before Isaac automatically
+resets. Contact reporting is enabled explicitly on both nested Koch finger bodies.
+Thresholds and TCP geometry remain provisional; verify against representative
+successful and failed grasps before using these as real-world ground truth.
 
-Implementation: `scripts/act_bridge.py` provides a private socket transport,
-`scripts/act_worker.py` performs LeRobot inference, and
-`scripts/act_rollout.py` owns the simulation evaluation loop.
+## Residual PPO
+
+The base ACT/diffusion policy stays frozen. PPO learns six corrections:
+
+```text
+command_radians = clip(base_command_radians + residual_limit * residual, joint_limits)
+residual is clipped to [-1,1]; default residual_limit = 0.25 rad per joint.
+```
+
+The residual actor receives joint angles, velocities, the current base command,
+previous correction, and chunk phase (25 values). The separate critic sees the
+31-value privileged simulator state. The actor cannot read box coordinates from
+the critic input. Deterministic initial corrections are zero; PPO training samples
+small stochastic corrections. The starter task reward is retained, with a small
+squared-correction penalty controlled by --residual-penalty (default 0.05).
+This is a starting implementation for testing; it does not guarantee improved
+success or real-robot robustness. Critic inputs omit the full base-policy chunk
+history, and the actor has no direct visual features beyond the base command.
+
+```bash
+# Short plumbing/gradient check, not a meaningful performance experiment.
+./run.sh --mode residual-ppo --train --headless --num_envs 2 \
+  --total-timesteps 256 --ppo-steps 32 --ppo-batch-size 64 \
+  --episode-seconds 2 --checkpoint-out checkpoints/my_smoke.zip
+
+# Longer training with normal 20-second episodes; checkpoint only is saved.
+./run.sh --mode residual-ppo --train --headless --num_envs 2 \
+  --total-timesteps 100000 --checkpoint-out checkpoints/residual_100k.zip
+
+# Evaluate the learned correction with the same base checkpoint and limits.
+./run.sh --mode residual-ppo --headless --num_envs 2 --episodes 20 \
+  --checkpoint checkpoints/residual_100k.zip --seed 123
+
+# Resume training into a NEW checkpoint file.
+./run.sh --mode residual-ppo --train --headless --num_envs 2 \
+  --checkpoint checkpoints/residual_100k.zip --total-timesteps 100000 \
+  --checkpoint-out checkpoints/residual_200k.zip
+```
+
+--total-timesteps counts transitions across all environments and is rounded up to
+complete PPO rollout batches. --ppo-steps is per environment; --ppo-batch-size
+must divide num_envs * ppo_steps. --ppo-device defaults to CPU for the small MLP.
+Saved checkpoints include PPO optimizer state and the base-policy/calibration
+contract; they do not bundle the frozen base model. A resume starts fresh simulator
+episodes, not an exact continuation of an interrupted trajectory. Existing output
+checkpoint paths are rejected to prevent overwriting experiments.
+
+When changing --policy-path, train a new residual. Loading a residual against a
+different base path, calibration, or correction limit is rejected. Keep the same
+--residual-limit and --lerobot-use-degrees when evaluating/resuming.
+
+Compare frozen and residual runs at identical seeds, environment counts, episode
+lengths and scene settings, then repeat over held-out seeds. Low simulation success
+can reflect camera, geometry, calibration or actuator mismatch; learning corrections
+to those mismatches alone does not establish better physical-robot performance.
+
+## Git experiments
+
+This folder is an independent local Git repository. main and tag act-baseline
+preserve the pre-residual version (12b356f). residual-ppo contains this approach.
+No remote repository or push was created. Generated USD, rollout outputs and
+checkpoints are ignored. The enclosing project repository is unchanged.
+
+```bash
+git status
+# Create a future experiment from the original baseline:
+git switch -c another-approach act-baseline
+# Return to the residual implementation:
+git switch residual-ppo
+```
+
+Implementation: scripts/policy_session.py shares vector stepping and conversion;
+scripts/act_worker.py owns frozen inference; scripts/residual_ppo.py implements
+training; koch_isaac/evaluation_env.py captures terminal metrics and critic inputs.
+See VALIDATION.md for actual checks and their limits.

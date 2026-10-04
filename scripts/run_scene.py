@@ -12,7 +12,7 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--num_envs", type=int, default=1)
 parser.add_argument("--steps", type=int, default=0, help="0: run until window closes; headless default 300")
-parser.add_argument("--mode", choices=("hold", "joints", "act"), default="hold")
+parser.add_argument("--mode", choices=("hold", "joints", "act", "policy", "residual-ppo"), default="hold")
 parser.add_argument("--camera", action="store_true")
 parser.add_argument("--fabric", choices=("auto", "on", "off"), default="auto",
                     help="auto: Fabric enabled for current rendered poses; off is diagnostic only")
@@ -28,8 +28,8 @@ parser.add_argument("--lerobot-use-degrees", action="store_true",
                     help="Use only if the training robot used use_degrees=True; gripper remains [0,100]")
 parser.add_argument("--print-joints-every", type=int, default=0,
                     help="Print converted measured joints every N steps; 0: final report only")
-parser.add_argument("--episodes", type=int, default=5, help="ACT: number of completed episodes")
-parser.add_argument("--policy-path", type=Path, help="ACT: local pretrained directory; defaults to cached home_v2")
+parser.add_argument("--episodes", type=int, default=5, help="Completed evaluation episodes per environment")
+parser.add_argument("--policy-path", type=Path, help="Local ACT/diffusion pretrained directory; defaults to cached home_v2")
 parser.add_argument("--policy-python", type=Path,
                     default=Path("/home/niel/miniforge3/envs/lerobot061/bin/python"))
 parser.add_argument("--policy-device", default="cuda", help="ACT worker device; simulator uses --device")
@@ -38,8 +38,44 @@ parser.add_argument("--video", action="store_true", help="ACT: record front.mp4 
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--log-every", type=int, default=30, help="ACT: action log interval in steps")
 parser.add_argument("--episode-seconds", type=float, help="ACT: override the default 20-second episode")
+parser.add_argument('--save-output', action=argparse.BooleanOptionalAction, default=True,
+                    help='Save rollout images/logs/video; always disabled when num_envs > 1')
+parser.add_argument('--policy-batch-size', type=int, default=4, help='Frozen policy inference microbatch (1..8)')
+parser.add_argument('--train', action='store_true', help='Train residual PPO instead of evaluating')
+parser.add_argument('--checkpoint', type=Path, help='Residual PPO .zip to evaluate or resume')
+parser.add_argument('--checkpoint-out', type=Path, help='New trained residual .zip; saved even with --no-save-output')
+parser.add_argument('--total-timesteps', type=int, default=100000, help='Training transitions across all environments')
+parser.add_argument('--ppo-steps', type=int, default=64, help='Steps per environment in each PPO rollout')
+parser.add_argument('--ppo-batch-size', type=int, default=64)
+parser.add_argument('--ppo-epochs', type=int, default=4)
+parser.add_argument('--ppo-device', default='cpu')
+parser.add_argument('--learning-rate', type=float, default=3e-4)
+parser.add_argument('--residual-limit', type=float, default=0.25, help='Maximum absolute correction per joint in radians')
+parser.add_argument('--residual-penalty', type=float, default=0.05)
+parser.add_argument('--grasp-height', type=float, default=0.025, help='Minimum box bottom height over table in metres')
+parser.add_argument('--grasp-hold', type=float, default=0.2, help='Required continuous grasp duration in seconds')
+parser.add_argument('--grasp-force', type=float, default=0.01, help='Minimum box contact force per finger in newtons')
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
+if args.num_envs > 1 or not args.save_output:
+    args.save_output = False
+    args.video = False
+    args.snapshot = None
+    print('Rollout files disabled. Training still saves the residual checkpoint.', flush=True)
+if args.train and args.mode != 'residual-ppo': parser.error('--train requires --mode residual-ppo')
+if args.checkpoint and args.mode != 'residual-ppo': parser.error('--checkpoint requires --mode residual-ppo')
+if args.mode == 'residual-ppo' and not args.train and not args.checkpoint:
+    parser.error('Residual evaluation requires --checkpoint')
+if args.train and args.steps: parser.error('Use --total-timesteps for training, not --steps')
+if not 1 <= args.policy_batch_size <= 8: parser.error('--policy-batch-size must be 1..8')
+for name in ('residual_limit','grasp_height','grasp_hold','grasp_force','learning_rate'):
+    if not 0 < getattr(args,name) < float('inf'): parser.error(name+' must be finite and positive')
+if not 0 <= args.residual_penalty < float('inf'): parser.error('residual_penalty must be finite and nonnegative')
+if args.train:
+    if min(args.total_timesteps,args.ppo_steps,args.ppo_epochs) < 1 or args.ppo_batch_size < 2:
+        parser.error('Invalid PPO training size')
+    if (args.num_envs*args.ppo_steps) % args.ppo_batch_size:
+        parser.error('--ppo-batch-size must divide num_envs * ppo-steps')
 if args.steps < 0: parser.error("--steps must be nonnegative")
 if args.num_envs < 1: parser.error("--num_envs must be positive")
 if args.print_joints_every < 0: parser.error("--print-joints-every must be nonnegative")
@@ -54,8 +90,7 @@ try:
         target_radians = lerobot_to_sim(args.lerobot_target, calibration, use_degrees=args.lerobot_use_degrees)
 except (OSError, ValueError, KeyError, TypeError) as error:
     parser.error(str(error))
-if args.mode == "act":
-    if args.num_envs != 1: parser.error("ACT rollout requires --num_envs 1")
+if args.mode in ("act", "policy", "residual-ppo"):
     if args.check: parser.error("Use --check separately from ACT evaluation")
     if args.fabric == "off": parser.error("ACT requires Fabric for current camera poses; use --fabric on")
     if args.episodes < 1 or args.log_every < 1: parser.error("--episodes and --log-every must be positive")
@@ -86,7 +121,7 @@ try:
     from koch_isaac import settings as s
     cfg = KochPickPlaceEnvCfg()
     cfg.scene.num_envs = args.num_envs
-    if args.mode == "act":
+    if args.mode in ("act", "policy", "residual-ppo"):
         cfg.num_rerenders_on_reset = 2
         if args.episode_seconds is not None: cfg.episode_length_s = args.episode_seconds
     cfg.sim.use_fabric = args.fabric != "off"
@@ -95,13 +130,23 @@ try:
     if args.camera: cfg.enable_front_camera()
     import gymnasium as gym
     from PIL import Image
-    env = gym.make("Koch-PinkBox-Place-v0", cfg=cfg).unwrapped
+    if args.mode in ('act','policy','residual-ppo'):
+        from koch_isaac.evaluation_env import EvaluatedKochEnv
+        cfg.enable_grasp_evaluation()
+        env = EvaluatedKochEnv(cfg, grasp_height=args.grasp_height,
+                               grasp_hold=args.grasp_hold, grasp_force=args.grasp_force)
+    else:
+        env = gym.make("Koch-PinkBox-Place-v0", cfg=cfg).unwrapped
     try:
-        env.reset(seed=args.seed)
-        if args.mode == "act":
-            from act_rollout import rollout
-            rollout(env, args, calibration)
+        if args.mode in ("act", "policy", "residual-ppo"):
+            if args.train:
+                from residual_ppo import train
+                train(env,args,calibration)
+            else:
+                from act_rollout import rollout
+                rollout(env,args,calibration)
         else:
+            env.reset(seed=args.seed)
             if tuple(s.JOINT_NAMES) != SIM_JOINT_NAMES:
                 raise ValueError("Action joint order differs from the calibration mapping")
             robot = env.scene["robot"]

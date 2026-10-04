@@ -34,7 +34,7 @@
     "ACTION": "MEAN_STD"
   },
   "control_hz": 30,
-  "status": "frozen_act_rollout_available; scene, camera and joint calibration provisional; no RL training",
+  "status": "frozen_policy_vector_rollout_and_residual_ppo_available; ACT validation only; scene, camera and joint calibration provisional",
   "joint_order": [
     "shoulder_pan",
     "shoulder_lift",
