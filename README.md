@@ -375,3 +375,10 @@ round. With --ppo-epochs 4, PPO makes four passes over those 128 transitions. At
 30 Hz, --episode-seconds 20 permits at most 600 control steps per attempt; PPO
 batches can cross episode boundaries. Evaluation with --episodes 10 and two
 environments counts 20 completed attempts.
+
+Training enables SB3's built-in progress bar alongside the metric table. It
+shows completed/requested transitions, percentage, elapsed time and estimated
+remaining time. On resumed runs, progress covers the additional requested
+transitions; the metric table retains the cumulative total_timesteps. The ETA
+is an estimate based on observed speed. This uses learn(progress_bar=True),
+with the already-installed tqdm and rich packages; no custom ETA callback.

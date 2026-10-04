@@ -109,7 +109,7 @@ def train(env, args, calibration):
         model.set_logger(Logger(folder=None,output_formats=[HumanOutputFormat(sys.stdout)]))
         before = model.num_timesteps
         model.learn(total_timesteps=args.total_timesteps,reset_num_timesteps=not bool(args.checkpoint),
-                    callback=WindowCallback(env),progress_bar=False)
+                    callback=WindowCallback(env),progress_bar=True)
         status = 'completed' if model.num_timesteps-before >= args.total_timesteps else 'stopped_early'
     except KeyboardInterrupt:
         status = 'interrupted'
