@@ -1,0 +1,46 @@
+{
+  "repo_id": "JiachenSu/koch11_pick_place_act_home_v2",
+  "cached_revision": "8a959c57ccdca65053b897eef366f1365f8ea114",
+  "policy_type": "act",
+  "input_features": {
+    "observation.state": {
+      "type": "STATE",
+      "shape": [
+        6
+      ]
+    },
+    "observation.images.front": {
+      "type": "VISUAL",
+      "shape": [
+        3,
+        480,
+        640
+      ]
+    }
+  },
+  "output_features": {
+    "action": {
+      "type": "ACTION",
+      "shape": [
+        6
+      ]
+    }
+  },
+  "chunk_size": 100,
+  "n_action_steps": 100,
+  "normalization_mapping": {
+    "VISUAL": "MEAN_STD",
+    "STATE": "MEAN_STD",
+    "ACTION": "MEAN_STD"
+  },
+  "control_hz": 30,
+  "status": "frozen_act_rollout_available; scene, camera and joint calibration provisional; no RL training",
+  "joint_order": [
+    "shoulder_pan",
+    "shoulder_lift",
+    "elbow_flex",
+    "wrist_flex",
+    "wrist_roll",
+    "gripper"
+  ]
+}
