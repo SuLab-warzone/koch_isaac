@@ -80,6 +80,15 @@ class WindowCallback(BaseCallback):
         super().__init__()
         self.sim_env = env
     def _on_step(self):
+        # Episode returns are accumulated before reset, including the residual
+        # penalty but excluding PPO's timeout value bootstrap.
+        for index, info in enumerate(self.locals.get('infos', [])):
+            episode = info.get('episode')
+            if episode is not None:
+                self.logger.info(
+                    f"Episode reward: env={info.get('env_id', index)} "
+                    f"steps={int(episode['l'])} reward_sum={float(episode['r']):.6f}"
+                )
         viewers = self.sim_env.sim.visualizers
         return not viewers or any(v.is_running() and not v.is_closed for v in viewers)
 

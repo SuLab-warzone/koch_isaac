@@ -382,3 +382,10 @@ remaining time. On resumed runs, progress covers the additional requested
 transitions; the metric table retains the cumulative total_timesteps. The ETA
 is an estimate based on observed speed. This uses learn(progress_bar=True),
 with the already-installed tqdm and rich packages; no custom ETA callback.
+
+During training, every completed episode prints an Episode reward line with its
+environment ID, episode length, and reward_sum. This is the undiscounted sum of
+that episode's task rewards including the residual penalty, before PPO's timeout
+value bootstrap. Partial episodes do not print a completed total. The existing
+rollout/ep_rew_mean remains the mean of the recent completed episode totals.
+These lines are console-only and also appear when rollout file saving is disabled.
