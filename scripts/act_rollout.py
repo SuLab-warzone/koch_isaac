@@ -18,7 +18,7 @@ def rollout(env,args,calibration):
         model = None
         if args.mode == 'residual-ppo':
             from residual_ppo import load_residual
-            model = load_residual(args.checkpoint,session.contract,args.ppo_device)
+            model = load_residual(args.checkpoint,session.contract,args.policy_device)
         obs = session.reset()
         while (counts < args.episodes).any() and (not args.steps or session.steps < args.steps):
             if env.sim.visualizers and not any(v.is_running() and not v.is_closed for v in env.sim.visualizers): break

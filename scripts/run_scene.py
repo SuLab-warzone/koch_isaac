@@ -32,7 +32,7 @@ parser.add_argument("--episodes", type=int, default=5, help="Completed evaluatio
 parser.add_argument("--policy-path", type=Path, help="Local ACT/diffusion pretrained directory; defaults to cached home_v2")
 parser.add_argument("--policy-python", type=Path,
                     default=Path("/home/niel/miniforge3/envs/lerobot061/bin/python"))
-parser.add_argument("--policy-device", default="cuda", help="ACT worker device; simulator uses --device")
+parser.add_argument("--policy-device", default="cuda", help="Shared ACT/diffusion and PPO device (default: cuda); simulator uses --device")
 parser.add_argument("--output-dir", type=Path, help="ACT: results directory; default outputs/act_TIMESTAMP")
 parser.add_argument("--video", action="store_true", help="ACT: record front.mp4 at 30 simulated fps")
 parser.add_argument("--seed", type=int, default=42)
@@ -48,7 +48,6 @@ parser.add_argument('--total-timesteps', type=int, default=100000, help='Trainin
 parser.add_argument('--ppo-steps', type=int, default=64, help='Steps per environment in each PPO rollout')
 parser.add_argument('--ppo-batch-size', type=int, default=64)
 parser.add_argument('--ppo-epochs', type=int, default=4)
-parser.add_argument('--ppo-device', default='cpu')
 parser.add_argument('--learning-rate', type=float, default=3e-4)
 parser.add_argument('--residual-limit', type=float, default=0.25, help='Maximum absolute correction per joint in radians')
 parser.add_argument('--residual-penalty', type=float, default=0.05)

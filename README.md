@@ -231,7 +231,7 @@ Actual checkpoint validation has been performed with ACT; a diffusion checkpoint
 has not yet been supplied for end-to-end verification.
 
 --policy-python defaults to /home/niel/miniforge3/envs/lerobot061/bin/python;
---policy-device controls frozen inference, --device controls Isaac, and
+--policy-device (default cuda) controls BOTH frozen inference and PPO; --device controls Isaac, and
 --policy-batch-size (default 4, maximum 8) bounds inference microbatches.
 
 Measured joints are converted with the follower calibration. RGB is converted
@@ -315,7 +315,9 @@ history, and the actor has no direct visual features beyond the base command.
 
 --total-timesteps counts transitions across all environments and is rounded up to
 complete PPO rollout batches. --ppo-steps is per environment; --ppo-batch-size
-must divide num_envs * ppo_steps. --ppo-device defaults to CPU for the small MLP.
+must divide num_envs * ppo_steps. Both models use --policy-device (cuda by default).
+The separate --ppo-device option has been removed. Use --policy-device cpu to run
+both models on CPU; the simulator device remains independently controlled by --device.
 Saved checkpoints include PPO optimizer state and the base-policy/calibration
 contract; they do not bundle the frozen base model. A resume starts fresh simulator
 episodes, not an exact continuation of an interrupted trajectory. Existing output
@@ -349,3 +351,27 @@ Implementation: scripts/policy_session.py shares vector stepping and conversion;
 scripts/act_worker.py owns frozen inference; scripts/residual_ppo.py implements
 training; koch_isaac/evaluation_env.py captures terminal metrics and critic inputs.
 See VALIDATION.md for actual checks and their limits.
+
+## Understanding the run settings
+
+The frozen ACT/diffusion and residual PPO are two different models. --policy-path
+loads the base model and its saved processors; --checkpoint loads the learned
+correction, critic, and PPO optimizer state. New residual training needs only the
+base model. Evaluation or resumed training of a learned residual needs both.
+The default cached ACT path means it can be omitted when using that same baseline.
+A combined deployment folder could package both models, but the PPO checkpoint
+does not replace the ACT/diffusion checkpoint.
+
+| Option | Purpose |
+|---|---|
+| --episodes | Completed evaluation attempts per environment; not used as a training stop condition |
+| --episode-seconds | Maximum simulated duration of each attempt; success/failure may end it earlier |
+| --total-timesteps | Total training transitions across all environments |
+| --ppo-steps | New transitions collected per environment before each PPO optimization round |
+| --ppo-epochs | Optimization passes over each collected rollout batch; no extra simulator steps |
+
+For example, 2 environments with --ppo-steps 64 collect 128 transitions per PPO
+round. With --ppo-epochs 4, PPO makes four passes over those 128 transitions. At
+30 Hz, --episode-seconds 20 permits at most 600 control steps per attempt; PPO
+batches can cross episode boundaries. Evaluation with --episodes 10 and two
+environments counts 20 completed attempts.

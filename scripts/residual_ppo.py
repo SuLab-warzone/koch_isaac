@@ -98,12 +98,12 @@ def train(env, args, calibration):
         session = PolicySession(env,args,calibration,output)
         vector = ResidualVecEnv(session)
         if args.checkpoint:
-            model = load_residual(args.checkpoint,session.contract,args.ppo_device,vector)
+            model = load_residual(args.checkpoint,session.contract,args.policy_device,vector)
         else:
             model = PPO(ResidualPolicy,vector,n_steps=args.ppo_steps,batch_size=args.ppo_batch_size,
                         n_epochs=args.ppo_epochs,learning_rate=args.learning_rate,
                         gamma=0.99,gae_lambda=0.95,clip_range=0.2,target_kl=0.03,
-                        policy_kwargs={'log_std_init':-2.0},device=args.ppo_device,seed=args.seed,verbose=1)
+                        policy_kwargs={'log_std_init':-2.0},device=args.policy_device,seed=args.seed,verbose=1)
             model.residual_contract = session.contract
         # No TensorBoard, CSV, monitor file or SB3 default temporary log directory.
         model.set_logger(Logger(folder=None,output_formats=[HumanOutputFormat(sys.stdout)]))
