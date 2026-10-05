@@ -82,8 +82,18 @@ This installed Isaac Lab revision uses **xyzw quaternions** and explicit
 | `koch_isaac/mdp/curriculum.py` | Curriculum terms (empty by default) |
 | `koch_isaac/mdp/terminations.py` | Placement metric and lost-object condition |
 | `config/baseline.json` | Your chosen ACT baseline and verified input/output contract |
+| `scripts/run_scene.py` | Short entry point: parse, prepare, start Isaac, dispatch, close |
+| `scripts/scene_cli.py` | Grouped CLI options, validation, calibration and local policy-file resolution |
+| `scripts/scene_runtime.py` | Environment configuration, preview/evaluation/training routing, resource cleanup |
+| `scripts/scene_preview.py` | Hold/joint-motion loop, joint reports, snapshots and smoke checks |
 | `scripts/smoke_checks.py` | Physics, control, reset-isolation and placement checks |
 | `assets/koch/SOURCE.md` | Asset source, pinned revision, license, modifications and limitations |
+
+Start reading at `scripts/run_scene.py:main()`. It validates inputs before opening
+Isaac, then imports `scene_runtime` after Kit starts. The runtime selects manual
+preview, policy evaluation, or PPO training. Both the environment and Kit close
+on errors. Existing commands are unchanged; `./run.sh --help` now groups options
+by purpose. Importing the entry script alone does not launch a simulation.
 
 Dimensions are read when configs are constructed: restart after editing
 `settings.py`. Bin position is static; to randomize it later, move **all five

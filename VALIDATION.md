@@ -111,3 +111,19 @@ env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
   a validity input signals this to the actor. See `docs/vision.md` for limitations and commands.
 - Model weights, real motor calibration, camera calibration under `config/local/`, recordings,
   logs, and test artifacts are not included in the public source tree.
+
+
+## Scene entry-point readability refactor
+
+- `run_scene.py` reduced to 51 lines; CLI preparation, environment lifecycle,
+  and manual preview live in separate commented modules.
+- Compared every project option against the original parser: names, defaults,
+  types, choices, arities and required flags are unchanged.
+- 39 regression tests pass, including pre-launch validation, import without Isaac,
+  environment cleanup on rollout/logger failures, and app failure exit status.
+- Headless two-environment joint preview and scene smoke checks passed, including
+  motion, settling, isolated reset and placement conditions.
+- An early viewer close before the first step now produces a valid stopped report
+  instead of accessing uninitialized observation/step variables.
+- Actual ACT + colour-plane residual training dispatch completed 8 transitions across
+  2 environments and saved a checkpoint; this verifies routing, not policy quality.
