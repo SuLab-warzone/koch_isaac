@@ -52,10 +52,10 @@ class CameraObservationsCfg(ObservationsCfg):
 
 @configclass
 class RewardsCfg:
-    reach = RewTerm(func=mdp.reach_box, weight=1.0)
-    lift = RewTerm(func=mdp.lift_box, weight=2.0)
-    transport = RewTerm(func=mdp.move_to_bin, weight=3.0)
-    placed = RewTerm(func=mdp.placed, weight=10.0)
+    reach = RewTerm(func=mdp.reach_box, weight=4.0)
+    lift = RewTerm(func=mdp.lift_box, weight=4.0)
+    transport = RewTerm(func=mdp.move_to_bin, weight=1.0)
+    placed = RewTerm(func=mdp.placed, weight=2.0)
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.002)
 
 
@@ -79,6 +79,8 @@ class KochPickPlaceEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self):
         self.seed = 42
+        # One action is held for 8 physics ticks: 240 / 8 = 30 control steps/s.
+        # Thus a 20-second episode times out after 600 control steps per environment.
         self.decimation = 8
         self.episode_length_s = 20.0
         self.sim.dt = 1/240
@@ -92,12 +94,20 @@ class KochPickPlaceEnvCfg(ManagerBasedRLEnvCfg):
         self.observations = CameraObservationsCfg()
 
     def enable_grasp_evaluation(self):
+        """Attach per-finger box-contact reporting before constructing the scene."""
         from isaaclab.sensors import ContactSensorCfg
         from .contact_spawn import spawn_contact_koch
         self.scene.robot.spawn.func = spawn_contact_koch
         self.scene.robot.spawn.activate_contact_sensors = True
         prefix = ("{ENV_REGEX_NS}/Robot/Geometry/follower_base_link/follower_link1_1/"
                   "follower_link2_1/follower_link3_1/follower_link4_1/follower_gripper_static_1")
+        # "Static" means fixed relative to the gripper, not fixed in world space.
+        # The moving finger rotates with the gripper joint. Both follow arm motion.
+        # Filter by PinkBox so table/container forces cannot masquerade as a grasp.
+        # update_period=0 permits a refresh every physics tick; our episode logger
+        # samples the latest force once per control step (30 Hz), without history.
+        # PhysX calculates contact impulses from collision geometry and dynamics;
+        # the sensor exposes those impulses divided by the physics timestep, in N.
         self.scene.static_finger_contact = ContactSensorCfg(
             prim_path=prefix, filter_prim_paths_expr=["{ENV_REGEX_NS}/PinkBox"],
             update_period=0.0, history_length=0,

@@ -5,6 +5,13 @@ for your Stage 5 simulation work. The robot is a public Koch follower model;
 prop dimensions and control parameters are provisional. The ACT rollout mode uses your locally cached checkpoint; successful simulation
 transfer is not assumed.
 
+## Vision-assisted residual PPO (Path 1)
+
+Use `--vision color-plane` to add RGB-estimated box position to a **new** residual actor.
+ACT stays frozen. The CV module is replaceable and needs no labelled training dataset.
+See [the vision guide](docs/vision.md) for the code structure, commands, calibration,
+validation results and the planar/lift limitation. Legacy checkpoints use `--vision none`.
+
 ## Launch on this computer
 
 ```bash
@@ -46,8 +53,8 @@ much more GPU memory than state-only observations.
 ## What is implemented
 
 - Fixed-base Koch follower, five arm joints and one rotating gripper joint.
-- Table, 25 mm pink cube (25 g), yellow open container with a 100 × 90 mm
-  interior and 45 mm walls, plus lighting.
+- Table, 30 × 20 × 8 mm pink box (10 g), yellow open container with an 80 × 60 mm
+  interior and 50 mm walls, plus lighting.
 - Separate floor and wall colliders: there is no solid collider filling the bin.
 - Vectorized environment instances, deterministic seeded resets, modest box
   distance/lateral/yaw variation, 20 s episodes and lost-object termination.
@@ -299,7 +306,7 @@ history, and the actor has no direct visual features beyond the base command.
   --total-timesteps 256 --ppo-steps 32 --ppo-batch-size 64 \
   --episode-seconds 2 --checkpoint-out checkpoints/my_smoke.zip
 
-# Longer training with normal 20-second episodes; checkpoint only is saved.
+# Longer training with normal 20-second episodes; saves checkpoint and TensorBoard metrics.
 ./run.sh --mode residual-ppo --train --headless --num_envs 2 \
   --total-timesteps 100000 --checkpoint-out checkpoints/residual_100k.zip
 
@@ -389,3 +396,103 @@ that episode's task rewards including the residual penalty, before PPO's timeout
 value bootstrap. Partial episodes do not print a completed total. The existing
 rollout/ep_rew_mean remains the mean of the recent completed episode totals.
 These lines are console-only and also appear when rollout file saving is disabled.
+
+
+### Contact-force troubleshooting in evaluation reports
+
+Every completed `Evaluation episode:` now includes `contact_forces`, also included
+in saved episode records when output is enabled. No extra flag is required.
+The static sensor follows the fixed jaw; the moving sensor follows the actuated
+jaw. Both filter contacts to the pink box, excluding table and container contacts.
+
+Each finger reports final world-coordinate normal force `[Fx,Fy,Fz]` in newtons,
+final/mean/peak magnitude, and the fraction of samples above `--grasp-force`.
+The mean includes zero-contact samples. `dual_contact_fraction` and
+`longest_dual_contact_s` show whether both fingers maintain contact;
+`peak_simultaneous_weaker_finger_normal_N` avoids combining peaks from different times.
+A released box can have zero final force even after a successful grasp, so inspect
+peaks and contact duration too. Sampling is once per control step (30 Hz by default),
+not every physics tick; brief impacts between samples can be missed.
+
+`lift_reference.minimum_upward_support_N` is configured box mass times gravity,
+not a measured force. The two ideal per-finger normal-force references use
+`N = mass * gravity / (2 * friction)` for an equal opposing side pinch at zero
+acceleration. Static friction describes incipient slip; the sliding reference uses
+dynamic friction. These estimates use the box material only: the finger material,
+friction combine mode, contact orientation, and acceleration change the actual
+requirement. They do not change rewards, grasp thresholds, or success criteria.
+Normal contact forces exclude tangential friction, so their world-Z component is
+not the total lift force. If mass/material randomization is added later, update the
+reference to use per-environment runtime properties instead of spawn configuration.
+
+
+### Live Rerun grasp diagnostics
+
+Append `--rerun` to your existing ACT/diffusion or residual-PPO command. For example:
+
+```bash
+./run.sh --mode policy --num_envs 1 --episodes 5 --rerun --no-save-output
+```
+
+This opens the camera, finger normal-force plots (including estimated grip
+requirements), gripper target/measured angles, and box-bottom height. Select the
+`sim_time` timeline and follow its latest time. Data is sampled before episode
+reset at 30 Hz of simulated time; wall-clock refresh depends on simulation speed.
+The optional `--rerun-env 1` selects environment 1 when `--num_envs` is at least 2.
+Only that environment is streamed. It also works during residual-PPO training.
+
+Rerun streaming is independent of `--save-output`: it does not create `.rrd` files
+or enable rollout files for multiple environments. The viewer keeps up to 1 GiB
+of history in memory, dropping older data when necessary. Omit `--rerun` to avoid
+its logging overhead. `--headless` hides the Isaac window; Rerun still opens its
+own desktop window. This requires `rerun-sdk` in the Isaac Lab Python environment
+(already installed on this machine).
+
+
+### Automatic TensorBoard training logs
+
+Each training invocation creates `runs/<output-checkpoint-stem>_<timestamp>/`.
+For example, `--checkpoint-out checkpoints/residual_100k_try_4.zip` produces
+`runs/residual_100k_try_4_YYYYMMDD_HHMMSS_microseconds/`. If no output checkpoint
+is specified, the automatically generated checkpoint name is used. Resumed
+training creates a new run directory named after its new output checkpoint;
+its step axis retains the cumulative timestep count. The chosen directory is
+printed at training startup. Existing logs are left intact.
+
+Start TensorBoard once and keep the parent directory as its log directory:
+
+```bash
+/home/niel/miniconda3/envs/isaaclab/bin/python -m tensorboard.main \
+  --logdir /home/niel/Documents/1stProject/koch_isaac/runs --port 6006
+```
+
+Open http://localhost:6006 and select the runs to compare. TensorBoard metric
+files are saved even with multiple environments or `--no-save-output`; those
+options still disable rollout images/videos/logs. Generated `runs/` is ignored
+by Git. Changes apply to the next training invocation, not an already running one.
+
+
+### Reward curves and training log frequency
+
+TensorBoard `rollout/ep_rew_mean` is the mean raw reward sum over SB3's recent
+completed episodes (100 by default), including the residual penalty. It appears
+after the first completed episode and a subsequent log write; a partial episode
+is not a completed return. With a 20-second horizon an episode may take 600
+control steps per environment.
+
+`--train-log-every 30` (default) uses SB3's built-in logging callback to write
+TensorBoard/console metrics every 30 control steps per environment, in addition
+to the normal PPO rollout reports. Use `--train-log-every 10` for more frequent
+updates, or `--train-log-every 0` for PPO rollout reports only. The TensorBoard
+step axis still counts transitions across all environments. The frequency does
+not change episode duration, PPO rollout length or optimization frequency; reward
+means change only when episodes finish and losses change only after optimization.
+A final log write and writer close retain metrics when training ends.
+
+The reach reward now measures distance from the configured TCP to the box COM
+(`root_com_pos_w`), with both expressed relative to the environment origin. Other
+box-position observations and lift/place/transport calculations keep their prior
+semantics. The current centered cuboid has coincident root and COM: changing the
+reference does not by itself fix a grasp that stops too high. Calibrate the TCP
+and inspect actual finger/table collision geometry before tuning reach distance
+scale or actuator strength.

@@ -29,6 +29,9 @@ def rollout(env,args,calibration):
                 counts[i] += 1
                 row = {k:v for k,v in infos[i].items() if k not in ('episode','terminal_observation','TimeLimit.truncated')}
                 accepted.append(row)
+                # Includes contact_forces captured before auto-reset: per-jaw final,
+                # mean and peak normal force, simultaneous contact, and ideal lift
+                # references. Reporting occurs on episode completion, not log_every.
                 print('Evaluation episode: '+json.dumps(row),flush=True)
         status = 'completed' if (counts >= args.episodes).all() else 'stopped_early'
     except KeyboardInterrupt:

@@ -92,3 +92,22 @@ To rerun the simulator terminal-state and placement check:
 env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
   /home/niel/miniconda3/envs/isaaclab/bin/python -B scripts/check_vector_env.py --headless
 ```
+
+
+## Colour-plane residual observation path
+
+- Added optional `--vision color-plane`, retaining `--vision none` for legacy checkpoints.
+- 30 unit/regression tests pass, including projection geometry, missing/ambiguous RGB detections,
+  per-environment cue gating/reset, actor/critic isolation, and old/new checkpoint serialization.
+- Rendered Isaac check: three positions/yaws in two environment origins; all six detections
+  succeeded. Measured XY errors were approximately 0.40–1.34 mm after setting silhouette
+  projection to the box mid-height. This checks the current simulated scene only.
+- Actual frozen ACT + residual PPO smoke test: 2 environments, 256 transitions, 4 completed
+  two-second timeout episodes. Checkpoint saved successfully; detection rate 100%.
+- Reloaded that checkpoint for 2 four-second evaluation episodes (240 transitions), crossing
+  a 100-action ACT queue boundary. Evaluation completed; detection rate 100%.
+- No grasp or placement improvement is claimed: these short runs validate plumbing only.
+- Table-plane features are intentionally retired after a nearby gripper-close attempt;
+  a validity input signals this to the actor. See `docs/vision.md` for limitations and commands.
+- Model weights, real motor calibration, camera calibration under `config/local/`, recordings,
+  logs, and test artifacts are not included in the public source tree.

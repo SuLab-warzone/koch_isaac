@@ -8,26 +8,20 @@ import torch
 from act_bridge import ACTWorker
 from utils import SIM_JOINT_NAMES, ZERO_COUNTS, DIRECTIONS, joint_report, lerobot_to_sim, sim_to_lerobot
 
-ACTOR_DIM = 25
-CRITIC_DIM = 31
-
-
-def make_residual_observation(q, velocity, base_action, previous_residual, phase, privileged):
-    actor = np.concatenate((q/np.pi, velocity/2.0, base_action/np.pi,
-                            previous_residual, phase[:,None]), axis=-1)
-    if actor.shape[-1] != ACTOR_DIM or privileged.shape[-1] != CRITIC_DIM:
-        raise ValueError("Unexpected residual observation layout")
-    result = np.concatenate((actor, privileged), axis=-1).astype(np.float32)
-    if not np.isfinite(result).all(): raise ValueError("Nonfinite residual observation")
-    return result
-
-
-def terminal_residual_observation(privileged):
-    # The critic reads ONLY the privileged suffix; no reset state or guessed next action.
-    return np.concatenate((np.zeros(ACTOR_DIM,dtype=np.float32),privileged)).astype(np.float32)
+# Re-export the old names so existing scripts/checkpoints remain import-compatible.
+from residual_observations import (
+    ACTOR_DIM, CRITIC_DIM, VISION_DIM,
+    make_residual_observation, terminal_residual_observation,
+)
 
 
 class PolicySession:
+    """One vector control loop shared by frozen-policy and residual-policy runs.
+
+    _observe: image/joints -> ACT target + optional CV features -> PPO observation.
+    step: PPO correction + cached ACT target -> physics -> rewards/reset handling.
+    ACT inference lives in its own LeRobot process and never receives PPO gradients.
+    """
     def __init__(self, env, args, calibration, output):
         self.env, self.args, self.calibration, self.output = env, args, calibration, output
         self.num_envs = env.num_envs
@@ -49,14 +43,33 @@ class PolicySession:
         self.motor_clipped=self.sim_clipped=self.state_clipped=0
         self.started=time.monotonic()
         self.last_rgb=None
+        # Vision is opt-in. Keeping the legacy 25-input actor allows old checkpoints
+        # to be evaluated unchanged with --vision none.
+        self.vision = None
+        self.actor_dim = ACTOR_DIM
+        if getattr(args, "vision", "none") == "color-plane":
+            from koch_isaac.vision.color_plane import load_config
+            from koch_isaac.vision.isaac_adapter import IsaacBoxVision
+            self.vision_config = load_config(args.vision_config)
+            self.vision = IsaacBoxVision(env, self.vision_config)
+            self.actor_dim += VISION_DIM
         self.worker=ACTWorker(args.policy_python,args.policy_path,args.policy_device,
                               seed=args.seed,num_envs=self.num_envs,batch_size=args.policy_batch_size)
         self.contract={"version":1,"policy_path":str(args.policy_path),
                        "policy_type":self.worker.info["policy_type"].item(),
                        "calibration":calibration,"zero_counts":ZERO_COUNTS.tolist(),
                        "directions":DIRECTIONS.tolist(),"use_degrees":args.lerobot_use_degrees,
-                       "residual_limit":args.residual_limit,"actor_dim":ACTOR_DIM,"critic_dim":CRITIC_DIM,
+                       "residual_limit":args.residual_limit,"actor_dim":self.actor_dim,"critic_dim":CRITIC_DIM,
                        "control_hz":30}
+        if self.vision is not None:
+            from koch_isaac import settings as s
+            # Version/config checks prevent loading a legacy or differently scaled
+            # actor by accident. Real-camera calibration is independent of this record.
+            self.contract.update(version=2, vision={
+                "backend": "color-plane", "feature_layout": "box_minus_tcp_xyz_valid_v1",
+                "config": self.vision_config, "tcp_offset": list(s.TCP_OFFSET),
+                "box_size": list(s.BOX_SIZE), "table_z": s.TABLE_POS[2] + s.TABLE_SIZE[2]/2,
+            })
         output.record("start",contract=self.contract,num_envs=self.num_envs,seed=args.seed,
                       grasp_height=args.grasp_height,grasp_hold=args.grasp_hold,grasp_force=args.grasp_force)
 
@@ -74,13 +87,22 @@ class PolicySession:
         self.motor_clipped+=int(np.count_nonzero(np.any((self.base_values<lo)|(self.base_values>hi),axis=-1)))
         self.base_action=lerobot_to_sim(self.base_values,self.calibration,use_degrees=self.args.lerobot_use_degrees)
         privileged=self.env.observation_manager.compute_group("policy").detach().cpu().numpy()
+        vision_features = None
+        if self.vision is not None:
+            vision_features = self.vision.observe(self.last_rgb, q[:, -1])
+            if self.steps % self.args.log_every == 0:
+                report = self.vision.report()
+                print("Vision: " + json.dumps(report), flush=True)
+                self.output.record("vision", step=self.steps, **report)
         self.observation=make_residual_observation(q,velocity,self.base_action,self.previous_residual,
-                                                 self.worker.phase,privileged)
+                                                 self.worker.phase,privileged,vision_features)
         return self.observation
 
     def reset(self):
         self.env.reset(seed=self.args.seed)
         self.worker.reset()
+        if self.vision is not None:
+            self.vision.reset()
         self.previous_residual[:]=0
         self.lengths[:]=0; self.returns[:]=0
         for _ in range(3): self.env.sim.render()
@@ -94,6 +116,8 @@ class PolicySession:
         delta=residual*self.args.residual_limit
         requested=self.base_action+delta
         target=np.clip(requested,self.lower,self.upper)
+        if self.vision is not None:
+            self.vision.note_action(target)
         self.sim_clipped+=int(np.count_nonzero(np.any(target!=requested,axis=-1)))
         self.output.frame(self.last_rgb[0])
         if self.steps%self.args.log_every==0:
@@ -115,9 +139,13 @@ class PolicySession:
             self.output.record("episode",**row)
             infos[i]={**row,"episode":{"r":row["return"],"l":row["steps"]},
                       "TimeLimit.truncated":bool(truncated[i] and not terminated[i]),
-                      "terminal_observation":terminal_residual_observation(self.env.terminal_policy_obs[int(i)])}
+                      "terminal_observation":terminal_residual_observation(self.env.terminal_policy_obs[int(i)], self.actor_dim)}
             self.lengths[i]=0; self.returns[i]=0; self.previous_residual[i]=0
-        if done.any(): self.worker.reset(np.flatnonzero(done))
+        if done.any():
+            ids = np.flatnonzero(done)
+            self.worker.reset(ids)
+            if self.vision is not None:
+                self.vision.reset(ids)
         observation=self._observe()
         if self.args.print_joints_every and self.steps%self.args.print_joints_every==0:
             q=self.robot.data.joint_pos.torch[:,self.joint_ids].detach().cpu().numpy()
@@ -138,6 +166,7 @@ class PolicySession:
                 "partial_episode_steps":self.lengths.tolist(),"motor_clipped":self.motor_clipped,
                 "sim_clipped":self.sim_clipped,"state_outside_calibration":self.state_clipped,
                 "elapsed_seconds":time.monotonic()-self.started,"episodes":rows,
+                "vision": self.vision.summary() if self.vision is not None else None,
                 "metrics":"Grasp: sustained dual-finger contact and lift; placement: settled/released at episode end"}
 
     def close(self): self.worker.close()

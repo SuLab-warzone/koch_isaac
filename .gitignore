@@ -5,3 +5,10 @@ assets/koch/usd/
 outputs/*
 !outputs/.gitkeep
 checkpoints/
+runs/
+config/local/
+.env
+.env.*
+*.pem
+*.key
+*.rrd

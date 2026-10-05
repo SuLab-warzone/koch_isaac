@@ -1,12 +1,20 @@
 """Small starter reward; tune the task here after calibrating geometry."""
 import torch
-from .observations import box_position, tcp_position, goal_position
+from .observations import box_position, box_com_position, tcp_position, goal_position
 from .terminations import placement_candidate
 from .. import settings as s
 
 
-def reach_box(env, std=0.06):
-    return 1.0 - torch.tanh(torch.linalg.vector_norm(box_position(env)-tcp_position(env), dim=-1)/std)
+def reach_box(env, std=0.02):
+    """Reward proximity of the configured TCP to the box's COM, not its link origin.
+
+    Both points are environment-relative and measured in metres. std is the
+    distance scale of the tanh reward, not a desired clearance above the box.
+    The current centered cuboid has coincident COM and root, so this change alone
+    does not lower a grasp; TCP_OFFSET must still describe the actual grasp point.
+    """
+    distance = torch.linalg.vector_norm(box_com_position(env) - tcp_position(env), dim=-1)
+    return 1.0 - torch.tanh(distance / std)
 
 
 def lift_box(env):

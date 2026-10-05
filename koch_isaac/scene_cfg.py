@@ -54,6 +54,8 @@ class KochSceneCfg(InteractiveSceneCfg):
     bin_y2 = static_box("BinY2", (s.BIN_INNER[0], s.BIN_WALL, s.BIN_INNER[2]),
                         (s.BIN_POS[0], s.BIN_POS[1]-(s.BIN_INNER[1]+s.BIN_WALL)/2, s.BIN_FLOOR+s.BIN_INNER[2]/2), (0.95, 0.75, 0.04))
     front_camera: CameraCfg | None = None
+    # Filled by env_cfg.enable_grasp_evaluation() in policy/PPO modes. The actual
+    # sensor paths and box-contact filter are configured there, before scene creation.
     static_finger_contact: ContactSensorCfg | None = None
     moving_finger_contact: ContactSensorCfg | None = None
 

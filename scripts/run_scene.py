@@ -14,6 +14,10 @@ parser.add_argument("--num_envs", type=int, default=1)
 parser.add_argument("--steps", type=int, default=0, help="0: run until window closes; headless default 300")
 parser.add_argument("--mode", choices=("hold", "joints", "act", "policy", "residual-ppo"), default="hold")
 parser.add_argument("--camera", action="store_true")
+parser.add_argument("--rerun", action="store_true",
+                    help="Open live camera/contact/gripper plots in Rerun (policy modes only; no files saved)")
+parser.add_argument("--rerun-env", type=int, default=0,
+                    help="Environment index shown by --rerun (default: 0)")
 parser.add_argument("--fabric", choices=("auto", "on", "off"), default="auto",
                     help="auto: Fabric enabled for current rendered poses; off is diagnostic only")
 parser.add_argument("--snapshot", type=Path, help="Save front RGB image; implies --camera")
@@ -46,6 +50,8 @@ parser.add_argument('--checkpoint', type=Path, help='Residual PPO .zip to evalua
 parser.add_argument('--checkpoint-out', type=Path, help='New trained residual .zip; saved even with --no-save-output')
 parser.add_argument('--total-timesteps', type=int, default=100000, help='Training transitions across all environments')
 parser.add_argument('--ppo-steps', type=int, default=64, help='Steps per environment in each PPO rollout')
+parser.add_argument('--train-log-every', type=int, default=30,
+                    help='Extra TensorBoard/console updates every N control steps per env; 0: PPO rollout updates only')
 parser.add_argument('--ppo-batch-size', type=int, default=64)
 parser.add_argument('--ppo-epochs', type=int, default=4)
 parser.add_argument('--learning-rate', type=float, default=3e-4)
@@ -54,8 +60,31 @@ parser.add_argument('--residual-penalty', type=float, default=0.05)
 parser.add_argument('--grasp-height', type=float, default=0.025, help='Minimum box bottom height over table in metres')
 parser.add_argument('--grasp-hold', type=float, default=0.2, help='Required continuous grasp duration in seconds')
 parser.add_argument('--grasp-force', type=float, default=0.01, help='Minimum box contact force per finger in newtons')
+# Perception is isolated from ACT. It only adds four inputs to a NEW residual actor.
+parser.add_argument('--vision', choices=('none', 'color-plane'), default='none',
+                    help='Residual box estimator; color-plane requires a new residual checkpoint')
+parser.add_argument('--vision-config', type=Path,
+                    default=Path(__file__).resolve().parents[1] / 'config/vision_color_plane.json',
+                    help='HSV/workspace/feature-scale settings for the separate colour estimator')
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
+if args.vision != 'none':
+    if args.mode not in ('act', 'policy', 'residual-ppo'):
+        parser.error('--vision requires a policy mode; use vision_cli.py for standalone images')
+    try:
+        from koch_isaac.vision.color_plane import load_config
+        load_config(args.vision_config)
+    except (ImportError, OSError, ValueError, KeyError, TypeError) as error:
+        parser.error('Vision configuration: ' + str(error))
+if args.rerun:
+    if args.mode not in ("act", "policy", "residual-ppo"):
+        parser.error("--rerun requires --mode policy, act, or residual-ppo")
+    if not 0 <= args.rerun_env < args.num_envs:
+        parser.error("--rerun-env must be between 0 and num_envs - 1")
+    # Fail before launching Isaac if the optional SDK is missing from its Python env.
+    import importlib.util
+    if importlib.util.find_spec("rerun") is None:
+        parser.error("--rerun requires rerun-sdk in the Isaac Lab Python environment")
 if args.num_envs > 1 or not args.save_output:
     args.save_output = False
     args.video = False
@@ -66,6 +95,7 @@ if args.checkpoint and args.mode != 'residual-ppo': parser.error('--checkpoint r
 if args.mode == 'residual-ppo' and not args.train and not args.checkpoint:
     parser.error('Residual evaluation requires --checkpoint')
 if args.train and args.steps: parser.error('Use --total-timesteps for training, not --steps')
+if args.train_log_every < 0: parser.error('--train-log-every must be nonnegative')
 if not 1 <= args.policy_batch_size <= 8: parser.error('--policy-batch-size must be 1..8')
 for name in ('residual_limit','grasp_height','grasp_hold','grasp_force','learning_rate'):
     if not 0 < getattr(args,name) < float('inf'): parser.error(name+' must be finite and positive')
@@ -118,6 +148,8 @@ try:
     import torch
     from koch_isaac.env_cfg import KochPickPlaceEnvCfg
     from koch_isaac import settings as s
+    # Compose scene/actions/observations/rewards/reset/termination settings, then
+    # apply CLI overrides BEFORE construction (Isaac creates assets and managers then).
     cfg = KochPickPlaceEnvCfg()
     cfg.scene.num_envs = args.num_envs
     if args.mode in ("act", "policy", "residual-ppo"):
@@ -131,13 +163,23 @@ try:
     from PIL import Image
     if args.mode in ('act','policy','residual-ppo'):
         from koch_isaac.evaluation_env import EvaluatedKochEnv
+        # Enables box-filtered normal-force sensors on both jaws. EvaluatedKochEnv
+        # captures episode diagnostics before Isaac automatically resets done envs.
         cfg.enable_grasp_evaluation()
         env = EvaluatedKochEnv(cfg, grasp_height=args.grasp_height,
                                grasp_hold=args.grasp_hold, grasp_force=args.grasp_force)
     else:
         env = gym.make("Koch-PinkBox-Place-v0", cfg=cfg).unwrapped
+    live_logger = None
     try:
+        if args.rerun:
+            from koch_isaac.rerun_logger import RerunLogger
+            live_logger = RerunLogger(env, args.rerun_env)
+            env.rerun_logger = live_logger
+            print(f"Rerun live diagnostics: env {args.rerun_env}; select sim_time in the viewer.", flush=True)
         if args.mode in ("act", "policy", "residual-ppo"):
+            # Evaluation prints one report per completed episode (up to 600 steps
+            # at the default horizon); training also has a separate PPO rollout table.
             if args.train:
                 from residual_ppo import train
                 train(env,args,calibration)
@@ -191,7 +233,11 @@ try:
                 "observation_shape": list(obs["policy"].shape),
                 "use_fabric": cfg.sim.use_fabric, "device": str(env.device), "status": "PASS"}, indent=2))
     finally:
-        env.close()
+        try:
+            if live_logger is not None:
+                live_logger.close()
+        finally:
+            env.close()
 
 except BaseException:
     import traceback
