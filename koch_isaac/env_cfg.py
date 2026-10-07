@@ -52,10 +52,14 @@ class CameraObservationsCfg(ObservationsCfg):
 
 @configclass
 class RewardsCfg:
-    reach = RewTerm(func=mdp.reach_box, weight=4.0)
-    lift = RewTerm(func=mdp.lift_box, weight=4.0)
-    transport = RewTerm(func=mdp.move_to_bin, weight=1.0)
-    placed = RewTerm(func=mdp.placed, weight=2.0)
+    reach = RewTerm(func=mdp.GraspReward, weight=0.5, params={"component": "reach"})
+    alignment = RewTerm(func=mdp.GraspReward, weight=1.0, params={"component": "alignment"})
+    aperture = RewTerm(func=mdp.GraspReward, weight=0.5, params={"component": "aperture"})
+    contact = RewTerm(func=mdp.GraspReward, weight=2.0, params={"component": "contact"})
+    lift = RewTerm(func=mdp.GraspReward, weight=8.0, params={"component": "lift"})
+    transport = RewTerm(func=mdp.GraspReward, weight=0.0, params={"component": "transport"})
+    grasp_bonus = RewTerm(func=mdp.GraspReward, weight=5.0, params={"component": "grasp_bonus"})
+    placement_bonus = RewTerm(func=mdp.GraspReward, weight=20.0, params={"component": "placement_bonus"})
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.002)
 
 
@@ -88,6 +92,15 @@ class KochPickPlaceEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physics = PhysxCfg(bounce_threshold_velocity=0.01)
         self.viewer.eye = (0.7, -0.6, 0.55)
         self.viewer.lookat = (0.15, 0.04, 0.08)
+        # All stepping modes now use contact-gated rewards, including preview.
+        self.enable_grasp_evaluation()
+
+    def set_reward_stage(self, stage):
+        """Focus first on lifting, then reduce holding reward and enable transport."""
+        if stage not in ("grasp", "pick-place"):
+            raise ValueError("Reward stage must be grasp or pick-place")
+        self.rewards.lift.weight = 8.0 if stage == "grasp" else 2.0
+        self.rewards.transport.weight = 0.0 if stage == "grasp" else 4.0
 
     def enable_front_camera(self):
         self.scene.front_camera = front_camera_cfg()

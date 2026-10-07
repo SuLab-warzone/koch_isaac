@@ -103,6 +103,8 @@ def _add_ppo_options(parser):
     group.add_argument('--learning-rate', type=float, default=3e-4)
     group.add_argument('--residual-limit', type=float, default=0.25, help='Maximum absolute correction per joint in radians')
     group.add_argument('--residual-penalty', type=float, default=0.05)
+    group.add_argument('--reward-stage', choices=('grasp', 'pick-place'), default='grasp',
+                       help='Grasp shaping first; pick-place reduces lift weight and enables transport')
 
 
 def _add_grasp_options(parser):

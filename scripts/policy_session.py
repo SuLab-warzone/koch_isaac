@@ -1,5 +1,6 @@
 """Shared vector simulation loop for frozen base-policy evaluation and residual PPO."""
 import json
+from dataclasses import asdict
 from pathlib import Path
 import re
 import time
@@ -61,6 +62,14 @@ class PolicySession:
                        "directions":DIRECTIONS.tolist(),"use_degrees":args.lerobot_use_degrees,
                        "residual_limit":args.residual_limit,"actor_dim":self.actor_dim,"critic_dim":CRITIC_DIM,
                        "control_hz":30}
+        self.reward_metadata = {
+            "version": "grasp_shaping_v1", "stage": args.reward_stage,
+            "residual_penalty": args.residual_penalty,
+            "weights": {name: float(term.weight) for name, term in vars(env.cfg.rewards).items()
+                        if hasattr(term, "weight")},
+        }
+        from koch_isaac.reward_shaping import GraspShapingSettings
+        self.reward_metadata["shaping"] = asdict(GraspShapingSettings())
         if self.vision is not None:
             from koch_isaac import settings as s
             # Version/config checks prevent loading a legacy or differently scaled
@@ -71,7 +80,8 @@ class PolicySession:
                 "box_size": list(s.BOX_SIZE), "table_z": s.TABLE_POS[2] + s.TABLE_SIZE[2]/2,
             })
         output.record("start",contract=self.contract,num_envs=self.num_envs,seed=args.seed,
-                      grasp_height=args.grasp_height,grasp_hold=args.grasp_hold,grasp_force=args.grasp_force)
+                      grasp_height=args.grasp_height,grasp_hold=args.grasp_hold,grasp_force=args.grasp_force,
+                      reward_settings=self.reward_metadata)
 
     def _observe(self):
         q=self.robot.data.joint_pos.torch[:,self.joint_ids].detach().cpu().numpy()
@@ -155,7 +165,7 @@ class PolicySession:
     def summary(self,status,episodes=None):
         rows=self.completed if episodes is None else episodes
         n=len(rows)
-        return {"status":status,"num_envs":self.num_envs,"vector_steps":self.steps,
+        return {"status":status,"reward_settings":self.reward_metadata,"num_envs":self.num_envs,"vector_steps":self.steps,
                 "transitions":self.steps*self.num_envs,"completed_episodes":n,
                 "grab_successes":sum(r["grab_success"] for r in rows),
                 "grab_success_rate":sum(r["grab_success"] for r in rows)/n if n else None,

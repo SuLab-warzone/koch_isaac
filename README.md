@@ -67,7 +67,8 @@ much more GPU memory than state-only observations.
 - Separate floor and wall colliders: there is no solid collider filling the bin.
 - Vectorized environment instances, deterministic seeded resets, modest box
   distance/lateral/yaw variation, 20 s episodes and lost-object termination.
-- Small reach/lift/transport/placement rewards; empty curriculum hook.
+- Grasp shaping with contact-gated continuous lift and one-time grasp/placement
+  bonuses; explicit grasp/pick-place reward stages; empty curriculum hook.
 - Placement success requires full oriented-box containment, resting on the
   container floor, low linear/angular speed, and the gripper TCP moved away,
   continuously for 0.5 s. It is a starter metric, not a grasp/contact classifier.
@@ -313,8 +314,11 @@ The residual actor receives joint angles, velocities, the current base command,
 previous correction, and chunk phase (25 values). The separate critic sees the
 31-value privileged simulator state. The actor cannot read box coordinates from
 the critic input. Deterministic initial corrections are zero; PPO training samples
-small stochastic corrections. The starter task reward is retained, with a small
+small stochastic corrections. Grasp shaping is now enabled by default, with a small
 squared-correction penalty controlled by --residual-penalty (default 0.05).
+Use `--reward-stage grasp` initially and `--reward-stage pick-place` after grasping
+improves. See [reward design and weights](docs/reward_design.md) for formulas,
+one-time bonuses, calibration assumptions, training commands and comparisons.
 This is a starting implementation for testing; it does not guarantee improved
 success or real-robot robustness. Critic inputs omit the full base-policy chunk
 history, and the actor has no direct visual features beyond the base command.

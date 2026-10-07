@@ -12,6 +12,7 @@ def create_environment(args):
     from koch_isaac.env_cfg import KochPickPlaceEnvCfg
 
     cfg = KochPickPlaceEnvCfg()
+    cfg.set_reward_stage(args.reward_stage)
     cfg.scene.num_envs = args.num_envs
     cfg.sim.use_fabric = args.fabric != "off"
     if args.device:

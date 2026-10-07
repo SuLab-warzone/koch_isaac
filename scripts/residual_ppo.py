@@ -128,12 +128,17 @@ def train(env, args, calibration):
         vector = ResidualVecEnv(session)
         if args.checkpoint:
             model = load_residual(args.checkpoint,session.contract,args.policy_device,vector)
+            previous_reward = getattr(model, "reward_metadata", None)
+            if previous_reward != session.reward_metadata:
+                print("Reward objective changed on resume; historical returns are not comparable. "
+                      f"New settings: {session.reward_metadata}", flush=True)
         else:
             model = PPO(ResidualPolicy,vector,n_steps=args.ppo_steps,batch_size=args.ppo_batch_size,
                         n_epochs=args.ppo_epochs,learning_rate=args.learning_rate,
                         gamma=0.99,gae_lambda=0.95,clip_range=0.2,target_kl=0.03,
                         policy_kwargs={'log_std_init':-2.0},device=args.policy_device,seed=args.seed,verbose=1)
             model.residual_contract = session.contract
+        model.reward_metadata = session.reward_metadata
         # Name logs after the OUTPUT checkpoint, including when resuming training.
         # A microsecond timestamp separates new attempts even if the checkpoint name
         # is reused after a failed run. TensorBoard can compare every child of runs/.

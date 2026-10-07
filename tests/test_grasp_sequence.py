@@ -131,6 +131,7 @@ class GraspSequenceTests(unittest.TestCase):
         cfg = SimpleNamespace(
             scene=SimpleNamespace(num_envs=0), sim=SimpleNamespace(use_fabric=False),
             enable_front_camera=Mock(), enable_grasp_evaluation=Mock(),
+            set_reward_stage=Mock(),
         )
         constructor = Mock(return_value=SimpleNamespace())
         with patch.dict(sys.modules, {
@@ -145,6 +146,7 @@ class GraspSequenceTests(unittest.TestCase):
         self.assertEqual(cfg.scene.num_envs, 1)
         cfg.enable_front_camera.assert_called_once()
         cfg.enable_grasp_evaluation.assert_called_once()
+        cfg.set_reward_stage.assert_called_once_with("grasp")
         self.assertEqual(constructor.call_args.kwargs["grasp_hold"], args.grasp_hold)
 
 

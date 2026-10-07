@@ -20,6 +20,7 @@ class FakeSession:
         self.num_envs = 2
         self.args = args
         self.contract = {"test": "training logs"}
+        self.reward_metadata = {"version": "test", "stage": "grasp"}
         self.last_rgb = None
         self.steps = 0
 
@@ -58,6 +59,8 @@ class TrainingLoggingTests(unittest.TestCase):
             runs = list((root / "runs").iterdir())
             self.assertEqual(len(runs), 1)
             self.assertTrue((root / "trial.zip").is_file())
+            saved = residual_ppo.load_residual(root / "trial.zip", {"test": "training logs"})
+            self.assertEqual(saved.reward_metadata, {"version": "test", "stage": "grasp"})
             events = EventAccumulator(str(runs[0])).Reload()
             rewards = events.Scalars("rollout/ep_rew_mean")
             self.assertTrue(rewards)
