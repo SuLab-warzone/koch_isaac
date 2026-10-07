@@ -19,12 +19,15 @@ def create_environment(args):
     if args.camera:
         cfg.enable_front_camera()
 
-    if args.mode in POLICY_MODES:
+    if args.mode in POLICY_MODES + ("grasp-test",):
         # Policy resets need freshly rendered images. Evaluation captures terminal
         # contact/success records before Isaac automatically resets each env.
         cfg.num_rerenders_on_reset = 2
         if args.episode_seconds is not None:
             cfg.episode_length_s = args.episode_seconds
+        if args.mode == "grasp-test":
+            # A sequence is one uninterrupted attempt, even when longer than 20 s.
+            cfg.episode_length_s = args.manual_sequence.duration + 1.0
         cfg.enable_grasp_evaluation()
         from koch_isaac.evaluation_env import EvaluatedKochEnv
 

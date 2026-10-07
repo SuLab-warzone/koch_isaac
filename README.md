@@ -1,5 +1,14 @@
 # Koch v1.1: pink box → yellow container
 
+## Manual grasp feasibility test
+
+Use `--mode grasp-test --grasp-sequence config/manual_grasp.json` to run measured
+open/align/close/lift waypoints with contact and lift diagnostics, without a policy.
+Copy and fill `config/manual_grasp.template.json` first; it contains no assumed
+working grasp poses. See [manual grasp instructions](docs/manual_grasp.md) for
+pose tuning, Rerun, commands, and pass/fail criteria. Hold mode also accepts
+`--radians-target` for six absolute URDF angles.
+
 An editable Isaac Lab **3.0** manager-based scene and RL environment, created
 for your Stage 5 simulation work. The robot is a public Koch follower model;
 prop dimensions and control parameters are provisional. The ACT rollout mode uses your locally cached checkpoint; successful simulation

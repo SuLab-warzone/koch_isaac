@@ -34,7 +34,7 @@ def _add_scene_options(parser):
     group = parser.add_argument_group("Scene and execution mode")
     group.add_argument("--num_envs", type=int, default=1)
     group.add_argument("--steps", type=int, default=0, help="0: run until window closes; headless default 300")
-    group.add_argument("--mode", choices=("hold", "joints", "act", "policy", "residual-ppo"), default="hold")
+    group.add_argument("--mode", choices=("hold", "joints", "grasp-test", "act", "policy", "residual-ppo"), default="hold")
     group.add_argument("--camera", action="store_true")
     group.add_argument("--fabric", choices=("auto", "on", "off"), default="auto",
                         help="auto: Fabric enabled for current rendered poses; off is diagnostic only")
@@ -46,6 +46,8 @@ def _add_joints_options(parser):
     """Only hold mode accepts explicit targets; conversion happens before Kit starts."""
     group = parser.add_argument_group("Joint targets and calibration")
     targets = group.add_mutually_exclusive_group()
+    targets.add_argument("--radians-target", type=float, nargs=6, metavar="RAD",
+                         help="Hold six absolute URDF joint angles; useful for measured grasp poses")
     targets.add_argument("--encoder-target", type=float, nargs=6, metavar="COUNT",
                          help="Hold six reported encoder counts, in shoulder pan/lift, elbow, wrist flex/roll, gripper order")
     targets.add_argument("--lerobot-target", type=float, nargs=6, metavar="VALUE",
@@ -55,6 +57,8 @@ def _add_joints_options(parser):
                         help="Use only if the training robot used use_degrees=True; gripper remains [0,100]")
     group.add_argument("--print-joints-every", type=int, default=0,
                         help="Print converted measured joints every N steps; 0: final report only")
+    group.add_argument("--grasp-sequence", type=Path,
+                        help="grasp-test: JSON open/align/close/lift poses; see config/manual_grasp.template.json")
 
 
 def _add_policy_options(parser):
@@ -79,7 +83,7 @@ def _add_output_options(parser):
                         help='Save rollout images/logs/video; always disabled when num_envs > 1')
     group.add_argument("--snapshot", type=Path, help="Save front RGB image; implies --camera")
     group.add_argument("--rerun", action="store_true",
-                        help="Open live camera/contact/gripper plots in Rerun (policy modes only; no files saved)")
+                        help="Open live camera/contact/gripper plots in Rerun (policy or grasp-test; no files saved)")
     group.add_argument("--rerun-env", type=int, default=0,
                         help="Environment index shown by --rerun (default: 0)")
 
@@ -141,9 +145,18 @@ def _validate_modes(parser, args):
     if args.train and args.steps:
         parser.error("Use --total-timesteps for training, not --steps")
     if args.mode != "hold" and (
-        args.encoder_target is not None or args.lerobot_target is not None
+        args.encoder_target is not None or args.lerobot_target is not None or args.radians_target is not None
     ):
         parser.error("Explicit joint targets require --mode hold")
+    if args.mode == "grasp-test":
+        if args.grasp_sequence is None:
+            parser.error("grasp-test requires --grasp-sequence JSON")
+        if args.num_envs != 1 or args.check:
+            parser.error("grasp-test requires one environment and cannot be combined with --check")
+        if args.fabric == "off":
+            parser.error("grasp-test requires Fabric for current rendered poses")
+    elif args.grasp_sequence is not None:
+        parser.error("--grasp-sequence requires --mode grasp-test")
 
     for name in ("residual_limit", "grasp_height", "grasp_hold", "grasp_force", "learning_rate"):
         if not 0 < getattr(args, name) < float("inf"):
@@ -182,8 +195,8 @@ def _validate_optional_tools(parser, args):
             parser.error("Vision configuration: " + str(error))
 
     if args.rerun:
-        if args.mode not in POLICY_MODES:
-            parser.error("--rerun requires --mode policy, act, or residual-ppo")
+        if args.mode not in POLICY_MODES + ("grasp-test",):
+            parser.error("--rerun requires --mode policy, act, residual-ppo, or grasp-test")
         if not 0 <= args.rerun_env < args.num_envs:
             parser.error("--rerun-env must be between 0 and num_envs - 1")
         if importlib.util.find_spec("rerun") is None:
@@ -231,17 +244,41 @@ def prepare_run(parser, args):
     try:
         calibration = load_calibration(args.calibration)
         target_radians = None
-        if args.encoder_target is not None:
+        if args.radians_target is not None:
+            import numpy as np
+            from grasp_sequence import LOWER, UPPER
+
+            target_radians = np.asarray(args.radians_target)
+            if not np.isfinite(target_radians).all() or np.any(target_radians < LOWER) or np.any(target_radians > UPPER):
+                raise ValueError("--radians-target exceeds simulation limits or contains nonfinite values")
+        elif args.encoder_target is not None:
             target_radians = encoder_to_sim(args.encoder_target)
         elif args.lerobot_target is not None:
             target_radians = lerobot_to_sim(
                 args.lerobot_target, calibration, use_degrees=args.lerobot_use_degrees
+            )
+        if args.mode == "grasp-test":
+            from grasp_sequence import load_sequence
+
+            args.manual_sequence = load_sequence(
+                args.grasp_sequence, calibration, use_degrees=args.lerobot_use_degrees
             )
     except (OSError, ValueError, KeyError, TypeError) as error:
         parser.error(str(error))
 
     if args.mode in POLICY_MODES:
         _resolve_policy_files(parser, args)
+        args.camera = True
+    if args.mode == "grasp-test":
+        # Diagnostics need camera/contact data, but no frozen-policy process.
+        import math
+
+        sequence_steps = math.ceil(args.manual_sequence.duration * 30)
+        if args.steps > sequence_steps:
+            parser.error("--steps cannot exceed the grasp sequence duration; increase hold_seconds instead")
+        if args.episode_seconds is not None:
+            parser.error("grasp-test sets its horizon from the sequence; edit move_seconds/hold_seconds instead")
+        args.steps = args.steps or sequence_steps
         args.camera = True
     if args.snapshot:
         args.camera = True

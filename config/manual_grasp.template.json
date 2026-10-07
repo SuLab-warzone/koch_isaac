@@ -1,0 +1,9 @@
+{
+  "units": "radians",
+  "move_seconds": 2.0,
+  "hold_seconds": 1.0,
+  "open": [null, null, null, null, null, null],
+  "align": [null, null, null, null, null, null],
+  "close": [null, null, null, null, null, null],
+  "lift": [null, null, null, null, null, null]
+}
